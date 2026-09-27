@@ -20,16 +20,16 @@ public static class OblationSceneBuilder
 
     static readonly Vector3[] Positions =
     {
-        new Vector3(-9, 0, -5), new Vector3(9, 0, 5), new Vector3(-5, 0, -7),
-        new Vector3(0, 0, -8), new Vector3(5, 0, -6), new Vector3(-8, 0, 0),
-        new Vector3(-2, 0, -1), new Vector3(3, 0, 0), new Vector3(8, 0, 0),
-        new Vector3(-5, 0, 5), new Vector3(0, 0, 7), new Vector3(5, 0, 7)
+        new Vector3(0, 0, 0), new Vector3(9, 0, 9), new Vector3(0, 0, -4.5f),
+        new Vector3(-1, 0, -9), new Vector3(4.5f, 0, 0), new Vector3(9, 0, -1),
+        new Vector3(0, 0, 4.5f), new Vector3(-1, 0, 9), new Vector3(-4.5f, 0, 0),
+        new Vector3(-9, 0, 1), new Vector3(-5, 0, -5), new Vector3(5, 0, 5)
     };
 
     static readonly int[,] Edges =
     {
-        {0,2},{0,5},{2,3},{2,6},{3,4},{3,6},{4,7},{4,8},{5,6},{5,9},
-        {6,7},{6,9},{6,10},{7,8},{7,10},{7,11},{8,1},{8,11},{9,10},{10,11},{11,1}
+        {0,2},{0,4},{0,6},{0,8},{2,3},{2,10},{3,10},{4,5},{4,11},{5,1},
+        {5,11},{6,7},{6,11},{7,11},{7,9},{8,9},{8,10},{9,10},{1,11},{2,4},{6,8}
     };
 
     static readonly Color Cyan = new Color(.12f, .78f, 1f, 1f);
@@ -95,7 +95,8 @@ public static class OblationSceneBuilder
 
         var references = new Dictionary<string, UnityEngine.Object>();
         BuildHud(hudUi, references, out Text[] planetLabels);
-        BuildMenus(gameUi, references);
+        BuildMenus(gameUi, references, out Button[] traitButtons, out Button[] unitButtons,
+            out Button[] upgradeButtons, out Button[] exterminatusButtons);
 
         OblationGame game = Child(runtime, "GameManager").gameObject.AddComponent<OblationGame>();
         references.Add("gameCamera", cameraObject.GetComponent<Camera>());
@@ -106,6 +107,8 @@ public static class OblationSceneBuilder
         references.Add("lineMaterial", lineMaterial);
         references.Add("selectionRing", selectionRing);
         references.Add("selectionLine", selectionLine);
+        OblationCatalogSO catalog = AssetDatabase.LoadAssetAtPath<OblationCatalogSO>("Assets/Data/OblationCatalog.asset");
+        if (catalog != null) references.Add("catalog", catalog);
         SerializedObject serialized = new SerializedObject(game);
         foreach (var entry in references)
         {
@@ -116,6 +119,10 @@ public static class OblationSceneBuilder
         SetArray(serialized, "planetViews", planetViews);
         SetArray(serialized, "routeViews", routes);
         SetArray(serialized, "planetLabels", planetLabels);
+        SetArray(serialized, "traitButtons", traitButtons);
+        SetArray(serialized, "unitButtons", unitButtons);
+        SetArray(serialized, "upgradeButtons", upgradeButtons);
+        SetArray(serialized, "exterminatusButtons", exterminatusButtons);
         serialized.ApplyModifiedPropertiesWithoutUndo();
         EditorUtility.SetDirty(game);
         EditorSceneManager.MarkSceneDirty(scene);
@@ -136,14 +143,184 @@ public static class OblationSceneBuilder
         Text resources = SceneText(root.transform, "HudUI/HudCanvas/HudScreen/TopBar/Resources");
         resources.fontSize = 15;
         SceneText(root.transform, "HudUI/HudCanvas/HudScreen/TopBar/Controls").text =
-            "WASD 이동  |  휠 확대  |  F 교리  |  Enter 지도 전환";
+            "WASD 이동  |  휠 확대  |  F 연구  |  Enter 지도 전환";
+        SceneText(root.transform, "HudUI/HudCanvas/HudScreen/TopBar/DoctrineButton/Label").text = "연구";
         string cards = "GameUI/GameCanvas/AssignmentModal/Card/";
-        SceneText(root.transform, cards + "ExtractorButton/Label").text = "유닛 생산 행성\n\n전투 · 노동 유닛";
-        SceneText(root.transform, cards + "ForgeButton/Label").text = "제조 행성\n\n부품 · 군수물자";
-        SceneText(root.transform, cards + "PsionicButton/Label").text = "에너지 생산 행성\n\n개발 · 이동 에너지";
+        SceneText(root.transform, cards + "ExtractorButton/Label").text = "유닛 특화\n\n생산 시간 단축";
+        SceneText(root.transform, cards + "ForgeButton/Label").text = "자원 특화\n\n광물 수급 강화";
+        SceneText(root.transform, cards + "PsionicButton/Label").text = "연구 특화\n\n신경 에너지 강화";
         EditorSceneManager.MarkSceneDirty(scene);
         EditorSceneManager.SaveScene(scene);
         return "Updated Inspector UI labels for the Figma planet roles.";
+    }
+
+    public static string ApplyPlanetPreview()
+    {
+        if (EditorApplication.isPlaying) throw new InvalidOperationException("Stop Play mode before editing the scene.");
+        var scene = EditorSceneManager.GetActiveScene();
+        if (scene.path != "Assets/Scenes/SampleScene.unity")
+            throw new InvalidOperationException("Open Assets/Scenes/SampleScene.unity first.");
+        Transform root = GameObject.Find("Root")?.transform;
+        Transform details = root?.Find("HudUI/HudCanvas/HudScreen/PlanetDetails");
+        OblationGame game = root?.Find("Util/Runtime/GameManager")?.GetComponent<OblationGame>();
+        if (details == null || game == null) throw new InvalidOperationException("Planet details are missing.");
+        if (details.Find("InteriorPreview") != null) return "Planet interior preview already exists.";
+        RectTransform frame = Fixed(details, "InteriorPreview", new Vector2(0, 1), new Vector2(0, 1),
+            new Vector2(248, -14), new Vector2(104, 80));
+        Paint(frame, new Color(.1f, .42f, .55f, 1f), false);
+        RectTransform viewport = Fixed(frame, "Image", new Vector2(0, 1), new Vector2(0, 1),
+            new Vector2(2, -2), new Vector2(100, 76));
+        RawImage image = viewport.gameObject.AddComponent<RawImage>();
+        image.raycastTarget = false;
+        image.color = Color.white;
+        SceneText(root, "HudUI/HudCanvas/HudScreen/PlanetDetails/PlanetName").rectTransform.sizeDelta = new Vector2(220, 32);
+        SceneText(root, "HudUI/HudCanvas/HudScreen/PlanetDetails/PlanetMeta").rectTransform.sizeDelta = new Vector2(220, 25);
+        SerializedObject serialized = new SerializedObject(game);
+        serialized.FindProperty("planetInteriorImage").objectReferenceValue = image;
+        serialized.ApplyModifiedPropertiesWithoutUndo();
+        EditorUtility.SetDirty(game);
+        EditorSceneManager.MarkSceneDirty(scene);
+        EditorSceneManager.SaveScene(scene);
+        return "Added serialized planet interior preview to the status panel.";
+    }
+
+    public static string ShowPlanetPreviewForReview()
+    {
+        if (!EditorApplication.isPlaying) throw new InvalidOperationException("Enter Play mode first.");
+        OblationGame game = GameObject.Find("Root")?.transform.Find("Util/Runtime/GameManager")?.GetComponent<OblationGame>();
+        if (game == null) throw new InvalidOperationException("GameManager was not found.");
+        SerializedObject serialized = new SerializedObject(game);
+        Button start = serialized.FindProperty("startButton")?.objectReferenceValue as Button;
+        if (start == null) throw new InvalidOperationException("Start button was not found.");
+        start.onClick.Invoke();
+        return "Opened the playable HUD for visual review.";
+    }
+
+    public static string ApplyFeedbackMap()
+    {
+        if (EditorApplication.isPlaying) throw new InvalidOperationException("Stop Play mode before editing the scene.");
+        var scene = EditorSceneManager.GetActiveScene();
+        if (scene.path != "Assets/Scenes/SampleScene.unity")
+            throw new InvalidOperationException("Open Assets/Scenes/SampleScene.unity first.");
+        Transform root = GameObject.Find("Root")?.transform;
+        Transform world = root?.Find("Util/World");
+        Transform planetRoot = world?.Find("Planets");
+        Transform orbitRoot = world?.Find("Orbits");
+        Transform hud = root?.Find("HudUI/HudCanvas/HudScreen");
+        OblationGame game = root?.Find("Util/Runtime/GameManager")?.GetComponent<OblationGame>();
+        if (planetRoot == null || orbitRoot == null || hud == null || game == null)
+            throw new InvalidOperationException("The saved Inspector hierarchy is incomplete.");
+
+        SerializedObject serialized = new SerializedObject(game);
+        SerializedProperty routeViews = serialized.FindProperty("routeViews");
+        if (routeViews == null || routeViews.arraySize != Edges.GetLength(0))
+            throw new InvalidOperationException("Route references do not match the feedback map.");
+        for (int i = 0; i < Names.Length; i++)
+            if (planetRoot.Find(Names[i]) == null) throw new InvalidOperationException("Missing planet: " + Names[i]);
+        for (int i = 0; i < routeViews.arraySize; i++)
+            if (!(routeViews.GetArrayElementAtIndex(i).objectReferenceValue is LineRenderer))
+                throw new InvalidOperationException("Missing route: " + i);
+
+        Transform star = world.Find("Background/Hungry Star");
+        if (star != null) Undo.DestroyObjectImmediate(star.gameObject);
+        for (int i = 1; i <= 5; i++)
+        {
+            Transform ring = orbitRoot.Find("Orbit " + i);
+            if (ring != null) Undo.DestroyObjectImmediate(ring.gameObject);
+        }
+        for (int i = 0; i < Names.Length; i++)
+        {
+            Transform planet = planetRoot.Find(Names[i]);
+            Undo.RecordObject(planet, "Spread planets in four directions");
+            planet.localPosition = Positions[i];
+            EditorUtility.SetDirty(planet);
+            Transform orbit = orbitRoot.Find(Names[i] + " Orbit");
+            if (orbit == null) continue;
+            LineRenderer line = orbit.GetComponent<LineRenderer>();
+            if (line == null) continue;
+            Undo.RecordObject(line, "Move planet orbit");
+            float radius = planet.Find("Body").localScale.x * 1.55f;
+            for (int point = 0; point < line.positionCount; point++)
+            {
+                float angle = point / (float)line.positionCount * Mathf.PI * 2f;
+                line.SetPosition(point, Positions[i] + new Vector3(Mathf.Cos(angle) * radius, -.2f, Mathf.Sin(angle) * radius));
+            }
+            EditorUtility.SetDirty(line);
+        }
+        for (int i = 0; i < routeViews.arraySize; i++)
+        {
+            LineRenderer route = (LineRenderer)routeViews.GetArrayElementAtIndex(i).objectReferenceValue;
+            int a = Edges[i, 0], b = Edges[i, 1];
+            Undo.RecordObject(route, "Reconnect four-direction routes");
+            route.gameObject.name = Names[a] + " - " + Names[b];
+            route.SetPosition(0, Positions[a] + Vector3.down * .18f);
+            route.SetPosition(1, Positions[b] + Vector3.down * .18f);
+            EditorUtility.SetDirty(route);
+        }
+
+        Transform focus = hud.Find("PlanetFocus");
+        if (focus == null)
+        {
+            var references = new Dictionary<string, UnityEngine.Object>();
+            BuildFocusUi(hud, references);
+            foreach (var entry in references)
+                serialized.FindProperty(entry.Key).objectReferenceValue = entry.Value;
+        }
+        serialized.ApplyModifiedPropertiesWithoutUndo();
+        EditorUtility.SetDirty(game);
+        EditorSceneManager.MarkSceneDirty(scene);
+        EditorSceneManager.SaveScene(scene);
+        return "Removed the central star, spread 12 planets across four directions, reconnected 21 routes, and added the focus UI.";
+    }
+
+    public static string ApplyNotionUi()
+    {
+        if (EditorApplication.isPlaying) throw new InvalidOperationException("Stop Play mode before editing the scene.");
+        var scene = EditorSceneManager.GetActiveScene();
+        if (scene.path != "Assets/Scenes/SampleScene.unity")
+            throw new InvalidOperationException("Open Assets/Scenes/SampleScene.unity first.");
+        Transform root = GameObject.Find("Root")?.transform;
+        Transform canvas = root?.Find("GameUI/GameCanvas");
+        RectTransform details = root?.Find("HudUI/HudCanvas/HudScreen/PlanetDetails")?.GetComponent<RectTransform>();
+        OblationGame game = root?.Find("Util/Runtime/GameManager")?.GetComponent<OblationGame>();
+        if (canvas == null || details == null || game == null)
+            throw new InvalidOperationException("The saved Inspector UI hierarchy is incomplete.");
+
+        var references = new Dictionary<string, UnityEngine.Object>();
+        details.sizeDelta = new Vector2(370, 480);
+        Transform open = details.Find("OperationsButton");
+        if (open == null)
+            references.Add("operationsOpenButton", Button(details, "OperationsButton", "행성 운영",
+                new Vector2(0, 1), new Vector2(0, 1), new Vector2(20, -424), new Vector2(330, 40)));
+        else references.Add("operationsOpenButton", open.GetComponent<Button>());
+
+        if (canvas.Find("OperationsModal") != null)
+            throw new InvalidOperationException("OperationsModal already exists; refusing to duplicate it.");
+        BuildOperationsUi(canvas, references, out Button[] traitButtons, out Button[] unitButtons,
+            out Button[] upgradeButtons, out Button[] exterminatusButtons);
+        SerializedObject serialized = new SerializedObject(game);
+        foreach (var entry in references)
+        {
+            SerializedProperty property = serialized.FindProperty(entry.Key);
+            if (property == null) throw new InvalidOperationException("Missing serialized field: " + entry.Key);
+            property.objectReferenceValue = entry.Value;
+        }
+        SetArray(serialized, "traitButtons", traitButtons);
+        SetArray(serialized, "unitButtons", unitButtons);
+        SetArray(serialized, "upgradeButtons", upgradeButtons);
+        SetArray(serialized, "exterminatusButtons", exterminatusButtons);
+        serialized.ApplyModifiedPropertiesWithoutUndo();
+        SceneText(root, "GameUI/GameCanvas/DoctrineModal/Card/Heading").text = "연구";
+        SceneText(root, "GameUI/GameCanvas/DoctrineModal/Card/Description").text = "한 번에 하나의 연구만 진행할 수 있습니다.";
+        SceneText(root, "HudUI/HudCanvas/HudScreen/PlanetDetails/SurpriseButton/Label").text = "역병";
+        SceneText(root, "HudUI/HudCanvas/HudScreen/DefenseAlert/DefendButton/Label").text = "방어 광물15";
+        SceneText(root, "GameUI/GameCanvas/AssignmentModal/Card/ExtractorButton/Label").text = "유닛 특화\n\n생산 시간 단축";
+        SceneText(root, "GameUI/GameCanvas/AssignmentModal/Card/ForgeButton/Label").text = "자원 특화\n\n광물 수급 강화";
+        SceneText(root, "GameUI/GameCanvas/AssignmentModal/Card/PsionicButton/Label").text = "연구 특화\n\n신경 에너지 강화";
+        EditorUtility.SetDirty(game);
+        EditorSceneManager.MarkSceneDirty(scene);
+        EditorSceneManager.SaveScene(scene);
+        return "Added the serialized planet operations UI and updated research/planet labels.";
     }
 
     static Text SceneText(Transform root, string path)
@@ -195,25 +372,7 @@ public static class OblationSceneBuilder
         UnityEngine.Object.DestroyImmediate(background.GetComponent<Collider>());
         background.GetComponent<Renderer>().sharedMaterial = starfieldMaterial;
 
-        GameObject star = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-        star.name = "Hungry Star";
-        star.transform.SetParent(backgroundRoot, false);
-        star.transform.localPosition = new Vector3(0, -1.2f, 0);
-        star.transform.localScale = Vector3.one * 2.4f;
-        UnityEngine.Object.DestroyImmediate(star.GetComponent<Collider>());
-        Material starMaterial = MaterialAsset("HungryStar", "Oblation/Procedural Planet");
-        starMaterial.SetColor("_BaseColor", new Color(1f, .32f, .04f));
-        starMaterial.SetColor("_AccentColor", new Color(1f, .9f, .25f));
-        starMaterial.SetColor("_OwnerColor", new Color(1f, .5f, .1f));
-        starMaterial.SetFloat("_Seed", 41f);
-        starMaterial.SetFloat("_Emission", 3.5f);
-        star.GetComponent<Renderer>().sharedMaterial = starMaterial;
-        EditorUtility.SetDirty(starMaterial);
-
         Transform orbits = Child(world, "Orbits");
-        for (int ring = 0; ring < 5; ring++)
-            Circle(orbits, "Orbit " + (ring + 1), Vector3.zero, 3.6f + ring * 3.1f,
-                new Color(.16f, .32f, .48f, .28f), .025f, 128, lineMaterial);
 
         Transform planetRoot = Child(world, "Planets");
         views = new OblationPlanetView[Names.Length];
@@ -441,8 +600,8 @@ public static class OblationSceneBuilder
         Label(header, "Brand", "OBLATION // 은하 지도", new Vector2(0, 1), new Vector2(0, 1), new Vector2(26, -13), new Vector2(275, 32), 22, Cyan);
         Bind(references, "resourcesText", Label(header, "Resources", "", new Vector2(0, 1), new Vector2(0, 1), new Vector2(315, -16), new Vector2(880, 34), 15, White));
         Bind(references, "ownershipText", Label(header, "Ownership", "", new Vector2(1, 1), new Vector2(1, 1), new Vector2(-345, -16), new Vector2(320, 28), 17, White));
-        Label(header, "Controls", "WASD 이동  |  휠 확대  |  F 교리  |  Enter 지도 전환", new Vector2(1, 1), new Vector2(1, 1), new Vector2(-345, -44), new Vector2(330, 22), 12, Muted);
-        Bind(references, "doctrineOpenButton", Button(header, "DoctrineButton", "교리", new Vector2(1, 1), new Vector2(1, 1), new Vector2(-135, -10), new Vector2(64, 46), false, 15));
+        Label(header, "Controls", "WASD 이동  |  휠 확대  |  F 연구  |  Enter 지도 전환", new Vector2(1, 1), new Vector2(1, 1), new Vector2(-345, -44), new Vector2(330, 22), 12, Muted);
+        Bind(references, "doctrineOpenButton", Button(header, "DoctrineButton", "연구", new Vector2(1, 1), new Vector2(1, 1), new Vector2(-135, -10), new Vector2(64, 46), false, 15));
         Bind(references, "pauseOpenButton", Button(header, "PauseButton", "일시정지", new Vector2(1, 1), new Vector2(1, 1), new Vector2(-18, -10), new Vector2(104, 46), false, 15));
 
         RectTransform chronicle = Fixed(hud, "Chronicle", new Vector2(0, 1), new Vector2(0, 1), new Vector2(18, -92), new Vector2(312, 230));
@@ -459,7 +618,9 @@ public static class OblationSceneBuilder
         Paint(status, Panel);
         Bind(references, "statusText", Label(status, "Status", "", new Vector2(0, .5f), new Vector2(0, .5f), new Vector2(18, 0), new Vector2(1500, 30), 16, White, TextAnchor.MiddleLeft));
 
-        RectTransform details = Fixed(hud, "PlanetDetails", Vector2.one, Vector2.one, new Vector2(-18, -92), new Vector2(370, 420));
+        BuildFocusUi(hud, references);
+
+        RectTransform details = Fixed(hud, "PlanetDetails", Vector2.one, Vector2.one, new Vector2(-18, -92), new Vector2(370, 480));
         Paint(details, Panel);
         Bind(references, "planetPanel", details.gameObject);
         Bind(references, "planetNameText", Label(details, "PlanetName", "", new Vector2(0, 1), new Vector2(0, 1), new Vector2(20, -18), new Vector2(330, 32), 24, Cyan));
@@ -469,17 +630,18 @@ public static class OblationSceneBuilder
         Bind(references, "planetProductionText", Label(details, "Production", "", new Vector2(0, 1), new Vector2(0, 1), new Vector2(20, -246), new Vector2(330, 48), 14, Muted));
         Bind(references, "sourceButton", Button(details, "SourceButton", "출발지 지정", new Vector2(0, 1), new Vector2(0, 1), new Vector2(20, -317), new Vector2(155, 42)));
         Bind(references, "zoomButton", Button(details, "ZoomButton", "행성 집중", new Vector2(0, 1), new Vector2(0, 1), new Vector2(195, -317), new Vector2(155, 42)));
-        Bind(references, "surpriseButton", Button(details, "SurpriseButton", "기습", new Vector2(0, 1), new Vector2(0, 1), new Vector2(20, -317), new Vector2(102, 42)));
+        Bind(references, "surpriseButton", Button(details, "SurpriseButton", "역병", new Vector2(0, 1), new Vector2(0, 1), new Vector2(20, -317), new Vector2(102, 42)));
         Bind(references, "assaultButton", Button(details, "AssaultButton", "강습", new Vector2(0, 1), new Vector2(0, 1), new Vector2(132, -317), new Vector2(102, 42)));
         Bind(references, "orbitalButton", Button(details, "OrbitalButton", "궤도 폭격", new Vector2(0, 1), new Vector2(0, 1), new Vector2(244, -317), new Vector2(106, 42), true, 15));
         Bind(references, "planetHintText", Label(details, "Hint", "", new Vector2(0, 1), new Vector2(0, 1), new Vector2(20, -365), new Vector2(330, 50), 12, Muted));
+        Bind(references, "operationsOpenButton", Button(details, "OperationsButton", "행성 운영", new Vector2(0, 1), new Vector2(0, 1), new Vector2(20, -424), new Vector2(330, 40)));
         details.gameObject.SetActive(false);
 
         RectTransform defense = Fixed(hud, "DefenseAlert", new Vector2(.5f, 1), new Vector2(.5f, 1), new Vector2(0, -92), new Vector2(460, 78));
         Paint(defense, Panel);
         Bind(references, "defensePanel", defense.gameObject);
         Bind(references, "defenseText", Label(defense, "DefenseText", "", new Vector2(0, 1), new Vector2(0, 1), new Vector2(18, -19), new Vector2(270, 35), 18, Red));
-        Bind(references, "defendButton", Button(defense, "DefendButton", "방어 산업15", new Vector2(0, 1), new Vector2(0, 1), new Vector2(300, -18), new Vector2(140, 42), true, 15));
+        Bind(references, "defendButton", Button(defense, "DefendButton", "방어 광물15", new Vector2(0, 1), new Vector2(0, 1), new Vector2(300, -18), new Vector2(140, 42), true, 15));
         defense.gameObject.SetActive(false);
 
         RectTransform labels = Full(hud, "PlanetLabels");
@@ -488,7 +650,73 @@ public static class OblationSceneBuilder
             planetLabels[i] = Label(labels, Names[i] + " Label", Names[i], new Vector2(.5f, .5f), new Vector2(.5f, .5f), Vector2.zero, new Vector2(150, 24), 13, Cyan, TextAnchor.MiddleCenter);
     }
 
-    static void BuildMenus(Transform parent, Dictionary<string, UnityEngine.Object> references)
+    static void BuildFocusUi(Transform hud, Dictionary<string, UnityEngine.Object> references)
+    {
+        RectTransform focus = Fixed(hud, "PlanetFocus", new Vector2(.5f, .5f), new Vector2(.5f, .5f),
+            new Vector2(0, -265), new Vector2(560, 106));
+        Paint(focus, new Color(.015f, .035f, .065f, .92f), false);
+        CanvasGroup group = focus.gameObject.AddComponent<CanvasGroup>();
+        group.alpha = 0;
+        group.interactable = false;
+        group.blocksRaycasts = false;
+        Bind(references, "focusUi", group);
+        RectTransform accent = Fixed(focus, "Accent", new Vector2(0, 1), new Vector2(0, 1),
+            Vector2.zero, new Vector2(560, 4));
+        Paint(accent, Cyan, false);
+        Bind(references, "focusHeadingText", Label(focus, "Heading", "행성 관측", new Vector2(0, 1), new Vector2(0, 1),
+            new Vector2(22, -16), new Vector2(516, 34), 23, Cyan));
+        Bind(references, "focusInfoText", Label(focus, "Info", "", new Vector2(0, 1), new Vector2(0, 1),
+            new Vector2(22, -59), new Vector2(516, 32), 15, White));
+        focus.gameObject.SetActive(false);
+    }
+
+    static void BuildOperationsUi(Transform canvas, Dictionary<string, UnityEngine.Object> references,
+        out Button[] traitButtons, out Button[] unitButtons, out Button[] upgradeButtons,
+        out Button[] exterminatusButtons)
+    {
+        RectTransform card;
+        RectTransform overlay = Modal(canvas, "OperationsModal", new Vector2(1180, 820), out card);
+        Bind(references, "operationsModal", overlay.gameObject);
+        Label(card, "Heading", "행성 운영", new Vector2(0, 1), new Vector2(0, 1),
+            new Vector2(30, -22), new Vector2(1100, 46), 34, Cyan);
+        Bind(references, "operationsSummaryText", Label(card, "Summary", "", new Vector2(0, 1), new Vector2(0, 1),
+            new Vector2(30, -74), new Vector2(1100, 58), 17, White));
+        Bind(references, "antennaButton", Button(card, "AntennaButton", "안테나 설치  광물 120",
+            new Vector2(0, 1), new Vector2(0, 1), new Vector2(30, -140), new Vector2(250, 46), false, 15));
+        traitButtons = new Button[3];
+        string[] traitNames = { "자원 특화", "유닛 특화", "연구 특화" };
+        for (int i = 0; i < traitButtons.Length; i++)
+            traitButtons[i] = Button(card, "Trait" + i, traitNames[i], new Vector2(0, 1), new Vector2(0, 1),
+                new Vector2(300 + i * 280, -140), new Vector2(260, 46), false, 15);
+
+        Label(card, "UnitsHeading", "유닛 생산", new Vector2(0, 1), new Vector2(0, 1),
+            new Vector2(30, -204), new Vector2(1100, 30), 20, Cyan);
+        unitButtons = new Button[8];
+        for (int i = 0; i < unitButtons.Length; i++)
+            unitButtons[i] = Button(card, "Unit" + i, "유닛 " + (i + 1), new Vector2(0, 1), new Vector2(0, 1),
+                new Vector2(30 + i % 4 * 280, -239 - i / 4 * 72), new Vector2(260, 64), false, 14);
+
+        Label(card, "UpgradeHeading", "유닛 강화", new Vector2(0, 1), new Vector2(0, 1),
+            new Vector2(30, -390), new Vector2(1100, 30), 20, Cyan);
+        upgradeButtons = new Button[6];
+        for (int i = 0; i < upgradeButtons.Length; i++)
+            upgradeButtons[i] = Button(card, "Upgrade" + i, "강화 " + (i + 1), new Vector2(0, 1), new Vector2(0, 1),
+                new Vector2(30 + i % 3 * 373, -430 - i / 3 * 58), new Vector2(350, 48), false, 14);
+
+        Label(card, "ExterminatusHeading", "익스터미나투스", new Vector2(0, 1), new Vector2(0, 1),
+            new Vector2(30, -555), new Vector2(1100, 30), 20, Red);
+        exterminatusButtons = new Button[3];
+        string[] endings = { "역병 절멸", "공성 절멸", "궤도 절멸" };
+        for (int i = 0; i < exterminatusButtons.Length; i++)
+            exterminatusButtons[i] = Button(card, "Exterminatus" + i, endings[i], new Vector2(0, 1), new Vector2(0, 1),
+                new Vector2(30 + i * 373, -594), new Vector2(350, 64), true, 16);
+        Bind(references, "operationsCloseButton", Button(card, "CloseButton", "은하로 돌아가기",
+            new Vector2(0, 1), new Vector2(0, 1), new Vector2(440, -737), new Vector2(300, 48)));
+    }
+
+    static void BuildMenus(Transform parent, Dictionary<string, UnityEngine.Object> references,
+        out Button[] traitButtons, out Button[] unitButtons, out Button[] upgradeButtons,
+        out Button[] exterminatusButtons)
     {
         Canvas canvas = MakeCanvas(parent, "GameCanvas", 10);
         Bind(references, "gameUiScaler", canvas.GetComponent<CanvasScaler>());
@@ -506,8 +734,8 @@ public static class OblationSceneBuilder
         RectTransform card;
         RectTransform doctrine = Modal(canvas.transform, "DoctrineModal", new Vector2(1040, 570), out card);
         Bind(references, "doctrineModal", doctrine.gameObject);
-        Label(card, "Heading", "교리 주조소", new Vector2(0, 1), new Vector2(0, 1), new Vector2(30, -25), new Vector2(900, 60), 43, Cyan);
-        Label(card, "Description", "행성의 공물을 절멸의 수단으로 바꾸십시오.", new Vector2(0, 1), new Vector2(0, 1), new Vector2(32, -92), new Vector2(940, 32), 18, White);
+        Label(card, "Heading", "연구", new Vector2(0, 1), new Vector2(0, 1), new Vector2(30, -25), new Vector2(900, 60), 43, Cyan);
+        Label(card, "Description", "한 번에 하나의 연구만 진행할 수 있습니다.", new Vector2(0, 1), new Vector2(0, 1), new Vector2(32, -92), new Vector2(940, 32), 18, White);
         DoctrineCard(card, "Viral", "역병 성전례", "역병 함대가 방어를 우회합니다.\n기습 피해 +38.", "정신력 45", 34, out Button viral);
         DoctrineCard(card, "Foundry", "전쟁 주조소", "질량 가속기와 공성 함선을 건조합니다.\n강습 피해 +34.", "광물 55 / 산업력 45", 370, out Button foundry);
         DoctrineCard(card, "Orbital", "궤도 칙령", "행성을 파괴하는 궤도 폭격을 해금합니다.", "정신력 55 / 산업력 70", 706, out Button orbital);
@@ -516,13 +744,16 @@ public static class OblationSceneBuilder
         Bind(references, "orbitalTechButton", orbital);
         Bind(references, "doctrineCloseButton", Button(card, "CloseButton", "은하로 돌아가기", new Vector2(0, 1), new Vector2(0, 1), new Vector2(390, -500), new Vector2(260, 46)));
 
+        BuildOperationsUi(canvas.transform, references, out traitButtons, out unitButtons,
+            out upgradeButtons, out exterminatusButtons);
+
         RectTransform assignment = Modal(canvas.transform, "AssignmentModal", new Vector2(840, 420), out card);
         Bind(references, "assignmentModal", assignment.gameObject);
         Bind(references, "assignmentTitleText", Label(card, "Heading", "", new Vector2(0, 1), new Vector2(0, 1), new Vector2(28, -24), new Vector2(780, 46), 26, Cyan));
         Bind(references, "assignmentDescriptionText", Label(card, "Description", "", new Vector2(0, 1), new Vector2(0, 1), new Vector2(28, -85), new Vector2(780, 64), 18, White));
-        Bind(references, "extractorButton", Button(card, "ExtractorButton", "유닛 생산 행성\n\n전투 · 노동 유닛", new Vector2(0, 1), new Vector2(0, 1), new Vector2(36, -164), new Vector2(232, 150)));
-        Bind(references, "forgeButton", Button(card, "ForgeButton", "제조 행성\n\n부품 · 군수물자", new Vector2(0, 1), new Vector2(0, 1), new Vector2(304, -164), new Vector2(232, 150)));
-        Bind(references, "psionicButton", Button(card, "PsionicButton", "에너지 생산 행성\n\n개발 · 이동 에너지", new Vector2(0, 1), new Vector2(0, 1), new Vector2(572, -164), new Vector2(232, 150)));
+        Bind(references, "extractorButton", Button(card, "ExtractorButton", "유닛 특화\n\n생산 시간 단축", new Vector2(0, 1), new Vector2(0, 1), new Vector2(36, -164), new Vector2(232, 150)));
+        Bind(references, "forgeButton", Button(card, "ForgeButton", "자원 특화\n\n광물 수급 강화", new Vector2(0, 1), new Vector2(0, 1), new Vector2(304, -164), new Vector2(232, 150)));
+        Bind(references, "psionicButton", Button(card, "PsionicButton", "연구 특화\n\n신경 에너지 강화", new Vector2(0, 1), new Vector2(0, 1), new Vector2(572, -164), new Vector2(232, 150)));
 
         RectTransform pause = Modal(canvas.transform, "PauseModal", new Vector2(360, 370), out card);
         Bind(references, "pauseModal", pause.gameObject);

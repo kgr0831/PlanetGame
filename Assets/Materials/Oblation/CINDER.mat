@@ -25,12 +25,20 @@ Material:
     m_TexEnvs: []
     m_Ints: []
     m_Floats:
-    - _Emission: 0.45
+    - _CloudCoverage: 0.55
+    - _CloudOpacity: 0
+    - _Emission: 0
+    - _HitFlash: 0
+    - _Relief: 0.7
+    - _SceneFocus: 1
     - _Seed: 78.87
     - _Selected: 0
+    - _StyleVariant: 0
+    - _SurfaceType: 5
     m_Colors:
-    - _AccentColor: {r: 0.548416, g: 0.32200003, b: 0.92, a: 1}
-    - _BaseColor: {r: 0.22080001, g: 0.31680956, b: 0.46, a: 1}
+    - _AccentColor: {r: 0.5529412, g: 0.5058824, b: 0.4627451, a: 1}
+    - _BaseColor: {r: 0.1882353, g: 0.17254902, b: 0.17254902, a: 1}
+    - _FeatureColor: {r: 0.627451, g: 0.57254905, b: 0.52156866, a: 1}
     - _OwnerColor: {r: 0.5, g: 0.5, b: 0.5, a: 1}
   m_BuildTextureStacks: []
   m_AllowLocking: 1

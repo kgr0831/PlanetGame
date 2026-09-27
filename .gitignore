@@ -12,6 +12,8 @@
 # Unity recovery files
 /Assets/_Recovery/
 /Assets/_Recovery.meta
+/Assets/Temp/
+/Assets/Temp.meta
 
 # IDE-generated files
 /.vs/

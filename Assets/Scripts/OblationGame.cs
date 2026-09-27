@@ -15,6 +15,7 @@ public sealed partial class OblationGame : MonoBehaviour
 
     sealed class Planet
     {
+        public PlanetDefinitionSO definition;
         public string name;
         public string trait;
         public Vector3 position;
@@ -28,6 +29,18 @@ public sealed partial class OblationGame : MonoBehaviour
         public float defense;
         public float scale;
         public float seed;
+        public bool antennaActive;
+        public float antennaHealth;
+        public float antennaRemaining;
+        public bool scouted;
+        public bool destroyed;
+        public readonly int[] traitLevels = new int[3];
+        public string queuedUnitId;
+        public float unitRemaining;
+        public float unitTotalTime;
+        public float hitFlash;
+        public string enemyUnitId;
+        public float enemyProductionClock;
         public GameObject body;
         public Renderer bodyRenderer;
         public Renderer haloRenderer;
@@ -45,37 +58,19 @@ public sealed partial class OblationGame : MonoBehaviour
         public float startClaim;
         public float damage;
         public bool defended;
+        public int stage;
+        public float startAntennaHealth;
+        public float committedUnits;
         public LineRenderer beam;
+        public OblationAttackVisual visual;
     }
 
     static readonly Color PlayerColor = new Color(0.12f, 0.78f, 1f);
-    static readonly Color EnemyColor = new Color(1f, 0.18f, 0.36f);
+    static readonly Color EnemyColor = new Color(1f, 0.42f, 0.12f);
     static readonly Color NeutralColor = new Color(0.48f, 0.55f, 0.65f);
-    static readonly string[] Names =
-    {
-        "VESPER", "NEMESIS", "KHEPRI", "TALOS", "MORROW", "EIDOLON",
-        "ORISON", "CINDER", "HALCYON", "PERIHELION", "GOLGOTHA", "SERAPH"
-    };
-    static readonly string[] Traits =
-    {
-        "순례자의 요람: 균형 잡힌 공물", "기계의 묘지: 높은 방어력",
-        "불안정 맨틀: +광물", "잃어버린 조선소: +산업력", "침묵의 합창단: +정신력",
-        "중력 우물: 공격 도착 시간 단축", "야생 생물권: 높은 인구",
-        "잿빛 위성: 낮은 방어력", "에너지 바다: +에너지", "예언자의 금고: +정신력",
-        "강철 대성당: +산업력", "왕관 행성: 인공지능 지휘 핵"
-    };
-    static readonly Vector3[] Positions =
-    {
-        new Vector3(-9, 0, -5), new Vector3(9, 0, 5), new Vector3(-5, 0, -7),
-        new Vector3(0, 0, -8), new Vector3(5, 0, -6), new Vector3(-8, 0, 0),
-        new Vector3(-2, 0, -1), new Vector3(3, 0, 0), new Vector3(8, 0, 0),
-        new Vector3(-5, 0, 5), new Vector3(0, 0, 7), new Vector3(5, 0, 7)
-    };
-    static readonly int[,] Edges =
-    {
-        {0,2},{0,5},{2,3},{2,6},{3,4},{3,6},{4,7},{4,8},{5,6},{5,9},
-        {6,7},{6,9},{6,10},{7,8},{7,10},{7,11},{8,1},{8,11},{9,10},{10,11},{11,1}
-    };
+    static readonly string[] Names = OblationGalaxyLayout.Names;
+    static readonly Vector3[] Positions = OblationGalaxyLayout.Positions;
+    static readonly int[,] Edges = OblationGalaxyLayout.Edges;
 
     readonly List<Planet> planets = new List<Planet>();
     readonly List<Attack> attacks = new List<Attack>();
@@ -91,6 +86,7 @@ public sealed partial class OblationGame : MonoBehaviour
     [SerializeField] LineRenderer[] routeViews;
     [SerializeField] Material haloTemplate;
     [SerializeField] Material lineMaterial;
+    [SerializeField] OblationCatalogSO catalog;
     [SerializeField] GameObject selectionRing;
     [SerializeField] LineRenderer selectionLine;
 
@@ -106,20 +102,23 @@ public sealed partial class OblationGame : MonoBehaviour
     int defendPlanet = -1;
     int lastClicked = -1;
     float lastClickTime;
-    float ore = 70;
-    float industry = 50;
-    float psi = 35;
-    float fuel = 55;
-    float combatUnits = 16;
-    float laborUnits = 8;
+    float biomass = 200;
+    float minerals = 160;
+    float neural = 100;
+    float offering;
+    float combatUnits;
     float aiStrength = 1;
     float economyClock;
     float aiClock;
     float eventClock;
+    float campaignElapsed;
     float fade;
-    float mapDistance = 25;
+    float mapDistance = OblationGalaxyLayout.StartingDistance;
+    float focusDistance = 18;
     float musicVolume = .55f;
     float sfxVolume = .7f;
+    public float UiSfxVolume => sfxVolume;
+    public int AppearanceSeed { get; private set; }
     float uiScaleSetting = 1;
     float cameraSensitivity = 1;
     bool optionsOpen;
@@ -130,6 +129,7 @@ public sealed partial class OblationGame : MonoBehaviour
     bool techFoundry;
     bool techOrbital;
     Vector3 cameraFocus;
+    Vector3 cameraLookFocus;
     Vector3 cameraFocusVelocity;
     public static bool TopologyIsConnected()
     {
@@ -148,6 +148,22 @@ public sealed partial class OblationGame : MonoBehaviour
         }
         for (int i = 0; i < seen.Length; i++) if (!seen[i]) return false;
         return true;
+    }
+
+    public static bool StartingRoutesSpanFourDirections()
+    {
+        bool north = false, south = false, east = false, west = false;
+        for (int i = 0; i < Edges.GetLength(0); i++)
+        {
+            int next = Edges[i, 0] == 0 ? Edges[i, 1] : Edges[i, 1] == 0 ? Edges[i, 0] : -1;
+            if (next < 0) continue;
+            Vector3 delta = Positions[next] - Positions[0];
+            north |= delta.z > 0 && Mathf.Abs(delta.z) >= Mathf.Abs(delta.x);
+            south |= delta.z < 0 && Mathf.Abs(delta.z) >= Mathf.Abs(delta.x);
+            east |= delta.x > 0 && Mathf.Abs(delta.x) >= Mathf.Abs(delta.z);
+            west |= delta.x < 0 && Mathf.Abs(delta.x) >= Mathf.Abs(delta.z);
+        }
+        return north && south && east && west;
     }
 
     void Awake()
@@ -171,15 +187,23 @@ public sealed partial class OblationGame : MonoBehaviour
         gameCamera.backgroundColor = new Color(.002f, .004f, .012f);
         gameCamera.fieldOfView = 50;
         gameCamera.nearClipPlane = .05f;
-        gameCamera.farClipPlane = 250;
+        gameCamera.farClipPlane = 1200;
     }
 
     bool BindGalaxy()
     {
         if (gameCamera == null || musicSource == null || sfxSource == null || effectsRoot == null ||
-            haloTemplate == null || lineMaterial == null || selectionRing == null || selectionLine == null ||
+            haloTemplate == null || lineMaterial == null || catalog == null || selectionRing == null || selectionLine == null ||
             planetViews == null || planetViews.Length != Positions.Length ||
-            routeViews == null || routeViews.Length != Edges.GetLength(0))
+            routeViews == null || routeViews.Length != Edges.GetLength(0) ||
+            catalog.planets == null || catalog.planets.Length != Positions.Length ||
+            catalog.resources == null || catalog.resources.Length != 4 ||
+            catalog.traits == null || catalog.traits.Length != 3 ||
+            catalog.units == null || catalog.units.Length != 8 ||
+            catalog.unitUpgrades == null || catalog.unitUpgrades.Length != 24 ||
+            catalog.research == null || catalog.research.Length != 9 ||
+            catalog.exterminatus == null || catalog.exterminatus.Length != 3 ||
+            catalog.antenna == null || catalog.conquestRule == null)
         {
             Debug.LogError("OBLATION: Inspector 참조가 누락되었거나 행성/보급로 개수가 맞지 않습니다.", this);
             return false;
@@ -193,15 +217,22 @@ public sealed partial class OblationGame : MonoBehaviour
                 Debug.LogError("OBLATION: 행성 Inspector 참조가 잘못되었습니다: " + i, this);
                 return false;
             }
+            PlanetDefinitionSO definition = catalog.planets[i];
+            if (definition == null || definition.id != Names[i])
+            {
+                Debug.LogError("OBLATION: 행성 데이터가 씬 순서와 맞지 않습니다: " + i, this);
+                return false;
+            }
 
             planets.Add(new Planet
             {
-                name = Names[i],
-                trait = Traits[i],
+                definition = definition,
+                name = definition.displayName,
+                trait = definition.traitDescription,
                 position = view.transform.position,
                 scale = view.bodyRenderer.transform.lossyScale.x,
-                maxPopulation = i == 0 || i == 1 ? 120 : 60 + (i * 17) % 61,
-                defense = i == 1 ? 62 : 12 + (i * 11) % 30,
+                maxPopulation = definition.maxPopulation,
+                defense = definition.defense,
                 body = view.bodyRenderer.gameObject,
                 bodyRenderer = view.bodyRenderer,
                 haloRenderer = view.haloRenderer
@@ -246,7 +277,7 @@ public sealed partial class OblationGame : MonoBehaviour
         musicSource.clip = CreateAmbientClip();
         musicSource.volume = musicVolume * .34f;
         musicSource.Play();
-        clickClip = CreateTone("화면 조작음", 580, .09f, .18f);
+        clickClip = CreateTone("화면 조작음", 1120, .055f, .12f);
         attackClip = CreateTone("공격음", 110, .34f, .26f);
         captureClip = CreateTone("정복음", 260, .65f, .3f);
     }
@@ -287,6 +318,10 @@ public sealed partial class OblationGame : MonoBehaviour
 
     void ResetCampaign(bool begin)
     {
+        FinishCampaignMetrics("abandoned");
+        AppearanceSeed=Guid.NewGuid().GetHashCode()&int.MaxValue;
+        var visualRandom=new System.Random(AppearanceSeed);
+        foreach(var view in planetViews)view.ApplyVisualSeed(visualRandom.Next());
         foreach (Attack attack in attacks) if (attack.beam != null) Destroy(attack.beam.gameObject);
         attacks.Clear();
         eventLog.Clear();
@@ -305,17 +340,26 @@ public sealed partial class OblationGame : MonoBehaviour
         planets[1].owner = Allegiance.Enemy;
         planets[1].enemyClaim = 1;
         planets[1].type = WorldType.Manufacturing;
-        ore = 70; industry = 50; psi = 35; fuel = 55;
-        combatUnits = 16; laborUnits = 8;
-        aiStrength = 1; economyClock = 0; aiClock = 2; eventClock = 0;
-        sourcePlanet = 0; selectedPlanet = 0; targetPlanet = -1; pendingAssignment = -1; defendPlanet = -1;
+        ResetActionEffects();
+        ResetSystems();
+        ResetPresentation(begin);
+        if (begin) StartCampaignMetrics();
+        if (planets[0].definition.captureTechnology != null)
+            capturedTechnologies.Add(planets[0].definition.captureTechnology.id);
+        aiStrength = 1; economyClock = 0; aiClock = 0; eventClock = 0; campaignElapsed = 0;
+        sourcePlanet = 0; selectedPlanet = -1; targetPlanet = -1; pendingAssignment = -1; defendPlanet = -1;
         techViral = techFoundry = techOrbital = false;
-        paused = factoryOpen = optionsOpen = false;
-        zoomed = begin;
+        paused = factoryOpen = operationsOpen = optionsOpen = false;
+        zoomed = false;
+        mapDistance = OblationGalaxyLayout.StartingDistance; focusDistance = 18; mapDragging = false;
         cameraFocus = Vector3.zero;
+        cameraLookFocus = Vector3.zero;
+        cameraFocusVelocity = Vector3.zero;
         AddLog("은하가 약속되었습니다. 공물을 거두십시오.");
+        if (begin) AddLog("시작 병력 6기 배치 완료. 행성을 선택해 작전을 시작하세요.");
         state = begin ? ScreenState.Playing : ScreenState.Title;
-        fade = begin ? 1f : 0f;
+        fade = 0;
+        ResetStory(begin);
         UpdateAllVisuals();
     }
 
@@ -323,25 +367,32 @@ public sealed partial class OblationGame : MonoBehaviour
     {
         float dt = Time.unscaledDeltaTime;
         RotateWorld(dt);
+        UpdateStory(dt);
         UpdateCamera(dt);
         if (musicSource != null) musicSource.volume = musicVolume * .34f;
         if (state != ScreenState.Playing) return;
         fade = Mathf.Max(0, fade - dt * .8f);
+        if (storyConsumedInput) return;
         HandleShortcuts();
+        HandleAccessibilityShortcuts();
         if (paused || optionsOpen || pendingAssignment >= 0 || state != ScreenState.Playing) return;
         HandleWorldInput();
+        if (TutorialHoldsSimulation) return;
+        dt *= gameSpeed;
+        campaignElapsed += dt;
+        TickSystems(dt);
         economyClock += dt;
         aiClock += dt;
         eventClock += dt;
-        if (economyClock >= 1f) { economyClock -= 1f; EconomyTick(); }
-        if (aiClock >= Mathf.Max(3.2f, 6.2f - aiStrength * .18f)) { aiClock = 0; EnemyTurn(); }
+        while (economyClock >= 1f) { economyClock -= 1f; EconomyTick(); }
+        if (aiClock >= Mathf.Max(15f, 24f - aiStrength * .5f)) { aiClock = 0; EnemyTurn(); }
         if (eventClock >= 32f) { eventClock = 0; TriggerEvent(); }
         UpdateAttacks(dt);
-        UpdateAllVisuals();
     }
 
     void RotateWorld(float dt)
     {
+        if (ReducedMotion) return;
         for (int i = 0; i < planets.Count; i++)
             if (planets[i].body != null) planets[i].body.transform.Rotate(Vector3.up, dt * (7 + i % 5), Space.World);
     }
@@ -349,65 +400,64 @@ public sealed partial class OblationGame : MonoBehaviour
     void UpdateCamera(float dt)
     {
         if (gameCamera == null) return;
+        if (UpdateStoryCamera(dt)) return;
+        HandleCameraZoom();
+        HandleMapNavigation(dt);
+        if (UpdateCinematicCamera(dt)) return;
         Vector3 desiredFocus = zoomed && selectedPlanet >= 0 ? planets[selectedPlanet].position : cameraFocus;
         if (state == ScreenState.Title)
         {
             desiredFocus = Vector3.zero;
-            mapDistance = 25 + Mathf.Sin(Time.unscaledTime * .15f) * 1.5f;
+            mapDistance = 25;
         }
-        if (state == ScreenState.Playing && !zoomed && !paused && !optionsOpen)
-        {
-            Vector2 move = ReadMove();
-            cameraFocus += new Vector3(move.x, 0, move.y) * dt * 7f * cameraSensitivity;
-            cameraFocus.x = Mathf.Clamp(cameraFocus.x, -7f, 7f);
-            cameraFocus.z = Mathf.Clamp(cameraFocus.z, -6f, 6f);
-            float scroll = ReadScroll();
-            if (Mathf.Abs(scroll) > .01f) mapDistance = Mathf.Clamp(mapDistance - scroll * .012f * cameraSensitivity, 15f, 34f);
-        }
-        float distance = zoomed ? 8.2f : mapDistance;
-        Vector3 focus = Vector3.SmoothDamp(gameCamera.transform.forward == Vector3.zero ? desiredFocus : GetCameraLookPoint(), desiredFocus, ref cameraFocusVelocity, .22f, 100, dt);
-        Vector3 desiredPosition = focus + new Vector3(0, distance * .72f, -distance * .72f);
-        gameCamera.transform.position = Vector3.Lerp(gameCamera.transform.position, desiredPosition, 1f - Mathf.Exp(-dt * 5f));
-        gameCamera.transform.rotation = Quaternion.Slerp(gameCamera.transform.rotation, Quaternion.LookRotation(focus - gameCamera.transform.position, Vector3.up), 1f - Mathf.Exp(-dt * 7f));
+        cameraLookFocus = ReducedMotion ? desiredFocus : Vector3.SmoothDamp(cameraLookFocus, desiredFocus, ref cameraFocusVelocity, .32f, 300f, dt);
+        float distance = zoomed ? focusDistance : mapDistance;
+        Vector3 desiredPosition = cameraLookFocus + new Vector3(0, distance * .72f, -distance * .72f);
+        float motion = ReducedMotion ? 1f : 1f - Mathf.Exp(-dt * 6f);
+        gameCamera.transform.position = Vector3.Lerp(gameCamera.transform.position, desiredPosition, motion);
+        gameCamera.transform.rotation = Quaternion.Slerp(gameCamera.transform.rotation,
+            Quaternion.LookRotation(cameraLookFocus - gameCamera.transform.position, Vector3.up), motion);
+        gameCamera.fieldOfView = Mathf.Lerp(gameCamera.fieldOfView, zoomed ? 34f : 50f, ReducedMotion ? 1 : 1f - Mathf.Exp(-dt * 6f));
     }
 
-    Vector3 GetCameraLookPoint()
+    void HandleCameraZoom()
     {
-        Ray ray = new Ray(gameCamera.transform.position, gameCamera.transform.forward);
-        Plane plane = new Plane(Vector3.up, Vector3.zero);
-        return plane.Raycast(ray, out float distance) ? ray.GetPoint(distance) : cameraFocus;
+        if (!CameraControlsAvailable || PointerOverUi()) return;
+        float scroll = ReadScroll();
+        if (Mathf.Abs(scroll) < .001f) return;
+        float factor = Mathf.Exp(-scroll * .08f * cameraSensitivity);
+        if (NavigationLesson) tutorialZoomTravel += Mathf.Abs(scroll);
+        if (tutorialActive && !NavigationLesson) cinematicZoom = Mathf.Clamp(cinematicZoom * factor, .55f, 2.2f);
+        else if (zoomed) focusDistance = Mathf.Clamp(focusDistance * factor, OblationGalaxyLayout.FocusNear, OblationGalaxyLayout.FocusFar);
+        else mapDistance = Mathf.Clamp(mapDistance * factor, OblationGalaxyLayout.MapNear, OblationGalaxyLayout.MapFar);
     }
 
     void HandleShortcuts()
     {
         if (EscapePressed())
         {
+            if (tutorialActive && !optionsOpen) { FinishTutorial(); return; }
             if (optionsOpen) optionsOpen = false;
+            else if (operationsOpen) { operationsOpen = false; paused = false; }
             else if (factoryOpen) factoryOpen = false;
             else if (zoomed) zoomed = false;
             else paused = !paused;
             PlayClick();
         }
-        if (FactoryPressed() && !optionsOpen && pendingAssignment < 0) { factoryOpen = !factoryOpen; PlayClick(); }
-        if (ZoomPressed() && selectedPlanet >= 0) { zoomed = !zoomed; PlayClick(); }
+        if (FactoryPressed() && !optionsOpen && !paused && pendingAssignment < 0 && (!tutorialActive || Beat == TutorialBeat.Research)) { operationsOpen = false; factoryOpen = !factoryOpen; PlayClick(); }
+        if (!tutorialActive && ZoomPressed() && selectedPlanet >= 0) { zoomed = !zoomed; PlayClick(); }
     }
 
     void HandleWorldInput()
     {
-        if (!LeftPressed() || PointerOverUi()) return;
-        Ray ray = gameCamera.ScreenPointToRay(PointerPosition());
-        if (!Physics.Raycast(ray, out RaycastHit hit, 300)) return;
-        PlanetMarker marker = hit.collider.GetComponent<PlanetMarker>();
-        if (marker == null) return;
-        int index = marker.index;
-        selectedPlanet = index;
-        if (planets[index].owner == Allegiance.Player)
-        {
-            sourcePlanet = index;
-            targetPlanet = -1;
-        }
-        else if (sourcePlanet >= 0 && planets[sourcePlanet].links.Contains(index)) targetPlanet = index;
-        if (lastClicked == index && Time.unscaledTime - lastClickTime < .38f) zoomed = true;
+        hoveredPlanet = -1;
+        if (PointerOverUi() || mapDragging || operationsOpen || factoryOpen) return;
+        int index = PlanetAtPointer();
+        if (index < 0) return;
+        hoveredPlanet = index;
+        if (!LeftPressed() || !TutorialAllowsWorldTarget(index)) return;
+        SelectPlanet(index);
+        if (!tutorialActive && lastClicked == index && Time.unscaledTime - lastClickTime < .38f) zoomed = true;
         lastClicked = index;
         lastClickTime = Time.unscaledTime;
         PlayClick();
@@ -419,6 +469,7 @@ public sealed partial class OblationGame : MonoBehaviour
         for (int i = 0; i < planets.Count; i++)
         {
             Planet p = planets[i];
+            if (p.destroyed) continue;
             bool besieged = IsTargeted(i);
             if (!besieged)
             {
@@ -444,33 +495,18 @@ public sealed partial class OblationGame : MonoBehaviour
             if (p.owner == Allegiance.Player)
             {
                 playerWorlds++;
-                if (besieged) continue;
-                float traitBoost = p.trait.Contains("+광물") || p.trait.Contains("+산업력") || p.trait.Contains("+정신력") || p.trait.Contains("+에너지") ? 1.45f : 1f;
-                if (i == 0) { ore += 1.2f; industry += .8f; psi += .35f; fuel += .7f; }
-                switch (p.type)
-                {
-                    case WorldType.Unit:
-                        combatUnits = Mathf.Min(80, combatUnits + .12f * traitBoost);
-                        laborUnits = Mathf.Min(80, laborUnits + .08f * traitBoost);
-                        break;
-                    case WorldType.Manufacturing:
-                        ore += 4.8f * traitBoost;
-                        industry += 2.6f * traitBoost;
-                        break;
-                    case WorldType.Energy:
-                        fuel += 2.25f * traitBoost;
-                        psi += .35f * traitBoost;
-                        break;
-                }
+                if (!besieged) TickPlanetProduction(p, i);
             }
             else if (p.owner == Allegiance.Enemy)
             {
                 enemyWorlds++;
+                if (!besieged) TickEnemyProduction(p, i);
             }
         }
-        if (playerWorlds > 0) { ore += laborUnits * .015f; industry += laborUnits * .01f; }
-        aiStrength += (.015f + enemyWorlds * .004f);
-        if (playerWorlds == planets.Count || (planets[1].owner == Allegiance.Player && playerWorlds >= 7)) Win();
+        aiStrength += (.001f + enemyWorlds * .0004f);
+        int resolved = playerWorlds;
+        for (int i = 0; i < planets.Count; i++) if (planets[i].destroyed) resolved++;
+        if (resolved == planets.Count && enemyWorlds == 0) Win();
         if (planets[0].owner != Allegiance.Player || playerWorlds == 0) Lose();
     }
 
@@ -487,13 +523,16 @@ public sealed partial class OblationGame : MonoBehaviour
         float bestScore = float.MinValue;
         for (int i = 0; i < planets.Count; i++)
         {
-            if (planets[i].owner != Allegiance.Enemy) continue;
+            if (planets[i].owner != Allegiance.Enemy || !IsConnected(i, Allegiance.Enemy)) continue;
             foreach (int neighbor in planets[i].links)
             {
                 Planet target = planets[neighbor];
-                if (target.owner == Allegiance.Enemy || IsTargeted(neighbor)) continue;
+                if (target.owner == Allegiance.Enemy || target.destroyed || IsTargeted(neighbor)) continue;
+                if (target.owner == Allegiance.Player && (campaignElapsed < 90 || tutorialActive)) continue;
+                if (tutorialActive && neighbor == tutorialTarget) continue;
                 float score = 120 - target.population - target.defense * .35f + UnityEngine.Random.Range(0, 28f);
-                if (target.owner == Allegiance.Player) score += 22;
+                if (target.owner == Allegiance.Neutral) score += 1000;
+                if (target.owner == Allegiance.Player) score += target.links.Count * 5f;
                 if (neighbor == 0) score += 38;
                 if (score > bestScore) { bestScore = score; bestFrom = i; bestTo = neighbor; }
             }
@@ -503,21 +542,38 @@ public sealed partial class OblationGame : MonoBehaviour
 
     bool BeginAttack(Allegiance attacker, int from, int to, AttackMode mode)
     {
-        if (from < 0 || to < 0 || !planets[from].links.Contains(to) || IsTargeted(to)) return false;
+        if (from < 0 || to < 0 || !planets[from].links.Contains(to) || IsTargeted(to) ||
+            planets[to].destroyed || !IsConnected(from, attacker)) return false;
+        float committedUnits = 0;
         if (attacker == Allegiance.Player)
         {
-            float unitsCost = mode == AttackMode.Orbital ? 4 : mode == AttackMode.Surprise ? 6 : 8;
-            float oreCost = mode == AttackMode.Assault ? 10 : mode == AttackMode.Orbital ? 20 : 0;
-            float industryCost = mode == AttackMode.Assault ? 16 : mode == AttackMode.Orbital ? 55 : 8;
-            float psiCost = mode == AttackMode.Surprise ? 18 : mode == AttackMode.Orbital ? 35 : 0;
-            float fuelCost = mode == AttackMode.Orbital ? 22 : 12;
-            if (ore < oreCost || industry < industryCost || psi < psiCost || fuel < fuelCost || combatUnits < unitsCost)
+            if (mode == AttackMode.Surprise && !techViral)
+            {
+                AddLog("먼저 침식 독성을 연구해야 합니다.");
+                return false;
+            }
+            int activeOperations = 0;
+            foreach (Attack existing in attacks) if (existing.attacker == Allegiance.Player) activeOperations++;
+            if (activeOperations >= (HasResearch("hive3") ? 2 : 1))
+            {
+                AddLog("전술 능력 슬롯이 모두 사용 중입니다.");
+                return false;
+            }
+            float unitsCost = mode == AttackMode.Orbital ? 2 : mode == AttackMode.Surprise ? 3 : 4;
+            OblationCost cost = mode == AttackMode.Surprise ? new OblationCost(25, 0, 18) :
+                mode == AttackMode.Orbital ? new OblationCost(0, 25, 25) : new OblationCost(30, 12, 0);
+            if (combatUnits < unitsCost || !CanAfford(cost))
             {
                 AddLog("작전에 필요한 자원 또는 전투 유닛이 부족합니다.");
                 return false;
             }
-            if (mode == AttackMode.Orbital && !techOrbital) { AddLog("먼저 궤도 칙령을 연구해야 합니다."); return false; }
-            ore -= oreCost; industry -= industryCost; psi -= psiCost; fuel -= fuelCost; combatUnits -= unitsCost;
+            if (mode == AttackMode.Orbital && !techOrbital) { AddLog("먼저 궤도 표적화를 연구해야 합니다."); return false; }
+            TrySpend(cost);
+            combatUnits -= unitsCost;
+            committedUnits = unitsCost;
+            if (campaignMetrics != null && campaignMetrics.firstRetrySeconds < 0 &&
+                campaignMetrics.firstFailedAdjacentAttackSeconds >= 0 && campaignMetrics.failedTargetId == planets[to].definition.id)
+                campaignMetrics.firstRetrySeconds = Time.unscaledTime - campaignStartTime;
         }
         Planet source = planets[from], target = planets[to];
         float rawDamage;
@@ -526,24 +582,39 @@ public sealed partial class OblationGame : MonoBehaviour
         {
             rawDamage = mode == AttackMode.Surprise ? 64 + (techViral ? 38 : 0) : mode == AttackMode.Orbital ? 175 : 88 + (techFoundry ? 34 : 0);
             rawDamage += source.population * .12f;
+            rawDamage *= UnitAttackBonus(mode) * ModifierMultiplier("attack");
+            rawDamage *= CounterMultiplier(mode);
+            rawDamage *= EncounterMultiplier(target, mode);
             duration = mode == AttackMode.Surprise ? 3.8f : mode == AttackMode.Orbital ? 4.2f : 5.4f;
+            duration *= UnitTravelMultiplier(mode);
+            if (mode == AttackMode.Surprise) duration *= target.definition.diseaseTimeEnvironmentMultiplier;
         }
         else
         {
-            rawDamage = 63 + aiStrength * 13 + source.population * .09f;
+            rawDamage = 63 + aiStrength * 13 + source.population * .09f +
+                (string.IsNullOrEmpty(source.enemyUnitId) ? 0 : FindUnit(source.enemyUnitId).attack * .3f);
             duration = 5.3f;
         }
         float armor = mode == AttackMode.Surprise ? target.defense * .18f : mode == AttackMode.Orbital ? target.defense * .05f : target.defense * .48f;
+        if (attacker == Allegiance.Player) armor *= 1f - UnitArmorPenetration(mode);
         var attack = new Attack
         {
             attacker = attacker, from = from, to = to, mode = mode, startPopulation = target.population,
             startClaim = attacker == Allegiance.Player ? target.playerClaim : target.enemyClaim,
-            damage = Mathf.Max(24, rawDamage - armor), duration = target.trait.Contains("도착 시간 단축") ? duration * .78f : duration
+            damage = Mathf.Max(24, rawDamage - armor), duration = duration * source.definition.attackArrivalMultiplier,
+            startAntennaHealth = target.antennaHealth, committedUnits = committedUnits
         };
-        attack.beam = CreateAttackBeam(source.position, target.position, attacker == Allegiance.Player ? PlayerColor : EnemyColor);
+        Color attackColor = AttackColor(attacker, mode);
+        attack.beam = CreateAttackBeam(source.position, target.position, attackColor);
+        attack.visual = attack.beam.gameObject.AddComponent<OblationAttackVisual>();
+        attack.visual.Initialize(source.position, target.position, attackColor, lineMaterial, AttackEffect(mode), reducedEffects);
+        if(visualDirector!=null)visualDirector.Event(source.position,attackColor,AttackEffect(mode),4);
         attacks.Add(attack);
+        if(attacker==Allegiance.Enemy)QueueStory(StoryChapter.Rival);
+        if (attacker == Allegiance.Player) RecordResearchAction("attack:" + mode);
+        if (attacker == Allegiance.Player) RecordEnemyAdaptation(mode);
         if (attacker == Allegiance.Enemy && target.owner == Allegiance.Player) { defendPlanet = to; AddLog("적 함대 접근 중: " + target.name); }
-        else AddLog((mode == AttackMode.Surprise ? "은밀한 역병이 향하는 곳: " : mode == AttackMode.Orbital ? "궤도 심판의 목표: " : "함대가 진군하는 곳: ") + target.name);
+        else AddLog((mode == AttackMode.Surprise ? "역병 함대가 향하는 곳: " : mode == AttackMode.Orbital ? "궤도 심판의 목표: " : "함대가 진군하는 곳: ") + target.name);
         sfxSource.PlayOneShot(attackClip, sfxVolume);
         return true;
     }
@@ -570,9 +641,36 @@ public sealed partial class OblationGame : MonoBehaviour
         for (int i = attacks.Count - 1; i >= 0; i--)
         {
             Attack attack = attacks[i];
+            if (!IsConnected(attack.from, attack.attacker))
+            {
+                if (attack.beam != null) Destroy(attack.beam.gameObject);
+                AddLog(planets[attack.to].name + " 작전 중단: 안테나 연결이 끊겼습니다.");
+                attacks.RemoveAt(i);
+                continue;
+            }
             attack.elapsed += dt;
             float progress = Mathf.Clamp01(attack.elapsed / attack.duration);
+            if (attack.visual != null) attack.visual.SetProgress(progress);
+            ConquestRuleSO rule = catalog.conquestRule;
+            if (rule != null && rule.stageThresholds != null && rule.stageNames != null)
+                while (attack.stage < rule.stageThresholds.Length && attack.stage < rule.stageNames.Length &&
+                    progress >= rule.stageThresholds[attack.stage])
+                {
+                    AddLog(planets[attack.to].name + " // " + rule.stageNames[attack.stage]);
+                    attack.stage++;
+                }
             Planet target = planets[attack.to];
+            if (attack.attacker == Allegiance.Enemy && target.antennaActive)
+            {
+                target.antennaHealth = Mathf.Max(0, attack.startAntennaHealth - attack.damage * progress);
+                if (target.antennaHealth <= 0)
+                {
+                    target.antennaActive = false;
+                    if (target.owner == Allegiance.Player)
+                        AddResources(new OblationCost(0, catalog.antenna.installationCost.minerals * .25f, 0));
+                    AddLog(target.name + " 안테나 파괴. 연결이 끊겼습니다.");
+                }
+            }
             target.population = Mathf.Lerp(attack.startPopulation, Mathf.Max(0, attack.startPopulation - attack.damage), Smooth(progress));
             float claim = Mathf.Clamp01(attack.startClaim + (attack.startPopulation - target.population) / target.maxPopulation);
             if (attack.attacker == Allegiance.Player)
@@ -585,22 +683,30 @@ public sealed partial class OblationGame : MonoBehaviour
                 target.enemyClaim = claim;
                 target.playerClaim = target.owner == Allegiance.Player ? 1 - claim : Mathf.Min(target.playerClaim, 1 - claim);
             }
-            if (attack.beam != null)
-            {
-                Color color = attack.attacker == Allegiance.Player ? PlayerColor : EnemyColor;
-                color.a = .35f + Mathf.Sin(Time.unscaledTime * 12f) * .25f;
-                attack.beam.startColor = attack.beam.endColor = color;
-                attack.beam.widthMultiplier = .75f + Mathf.Sin(Time.unscaledTime * 9f) * .22f;
-            }
             if (progress < 1) continue;
             if (attack.beam != null) Destroy(attack.beam.gameObject);
+            target.hitFlash = 1;
+            if(visualDirector!=null&&target.population>.6f)visualDirector.Event(target.position,AttackColor(attack.attacker,attack.mode),AttackEffect(attack.mode),7);
+            if(attack.mode==AttackMode.Assault) OblationCombatBurst.Spawn(effectsRoot, target.position, AttackColor(attack.attacker, attack.mode),
+                impactMaterial, reducedEffects ? 8 : 28, reducedEffects);
+            if (attack.attacker == Allegiance.Player)
+                combatUnits = Mathf.Min(120, combatUnits + attack.committedUnits * UnitSurvivalRefund(attack.mode));
             if (target.population <= .6f)
             {
                 Allegiance winner = target.playerClaim > target.enemyClaim ? Allegiance.Player :
                     target.enemyClaim > target.playerClaim ? Allegiance.Enemy : attack.attacker;
                 Capture(attack.to, winner);
             }
-            else AddLog(target.name + " 작전 실패. 잔존 인구 " + Mathf.CeilToInt(target.population) + "억.");
+            else
+            {
+                AddLog(target.name + " 작전 실패. 잔존 인구 " + Mathf.CeilToInt(target.population) + "억.");
+                if (attack.attacker == Allegiance.Player && campaignMetrics != null &&
+                    campaignMetrics.firstFailedAdjacentAttackSeconds < 0 && attack.from == 0)
+                {
+                    campaignMetrics.firstFailedAdjacentAttackSeconds = Time.unscaledTime - campaignStartTime;
+                    campaignMetrics.failedTargetId = target.definition.id;
+                }
+            }
             if (defendPlanet == attack.to) defendPlanet = -1;
             attacks.RemoveAt(i);
         }
@@ -612,7 +718,13 @@ public sealed partial class OblationGame : MonoBehaviour
     {
         Planet p = planets[index];
         Allegiance previous = p.owner;
+        bool hadAntenna = p.antennaActive;
         p.owner = owner;
+        p.antennaActive = index == (owner == Allegiance.Player ? 0 : 1);
+        p.antennaHealth = p.antennaActive ? catalog.antenna.durability : 0;
+        p.antennaRemaining = 0;
+        p.enemyUnitId = null;
+        p.enemyProductionClock = 0;
         p.population = 0;
         p.playerClaim = owner == Allegiance.Player ? 1 : 0;
         p.enemyClaim = owner == Allegiance.Enemy ? 1 : 0;
@@ -620,22 +732,32 @@ public sealed partial class OblationGame : MonoBehaviour
         {
             p.type = index == 0 ? WorldType.Unit : WorldType.Unassigned;
             if (index != 0) { pendingAssignment = index; paused = true; }
+            if (previous != Allegiance.Player && catalog.conquestRule != null)
+                AddResources(catalog.conquestRule.completionReward);
+            if (previous != Allegiance.Player && campaignMetrics != null && campaignMetrics.firstConquestSeconds < 0)
+                campaignMetrics.firstConquestSeconds = Time.unscaledTime - campaignStartTime;
+            if (previous != Allegiance.Player && p.definition.captureTechnology != null &&
+                capturedTechnologies.Add(p.definition.captureTechnology.id))
+                AddLog(p.name + " 고유 기술 획득: " + p.definition.captureTechnology.displayName + ".");
             AddLog(p.name + " 점령 완료. 그 특이점이 공물에 합류합니다.");
         }
         else
         {
+            if (previous == Allegiance.Player && hadAntenna && catalog.antenna != null)
+                AddResources(new OblationCost(0, catalog.antenna.installationCost.minerals * .25f, 0));
             p.type = (WorldType)(1 + index % 3);
+            p.antennaRemaining = catalog.antenna != null ? catalog.antenna.installationSeconds : 30;
             AddLog(p.name + "이(가) 적 대사제에게 함락되었습니다.");
         }
         if (previous != owner) SpawnShockwave(p.position, owner == Allegiance.Player ? PlayerColor : EnemyColor);
         sfxSource.PlayOneShot(captureClip, sfxVolume);
         UpdateAllVisuals();
         if (index == 0 && owner == Allegiance.Enemy) Lose();
-        if (index == 1 && owner == Allegiance.Player && CountOwned(Allegiance.Player) >= 7) Win();
     }
 
     void SpawnShockwave(Vector3 position, Color color)
     {
+        if(visualDirector!=null)visualDirector.Event(position,color,OblationEffectKind.Capture,8);
         var go = GameObject.CreatePrimitive(PrimitiveType.Sphere);
         go.name = "정복 충격파";
         go.transform.SetParent(effectsRoot);
@@ -645,24 +767,24 @@ public sealed partial class OblationGame : MonoBehaviour
         material.SetColor("_OwnerColor", color);
         material.SetFloat("_Progress", 1f);
         go.GetComponent<Renderer>().sharedMaterial = material;
-        go.AddComponent<OblationShockwave>();
+        go.AddComponent<OblationShockwave>().Initialize(material, reducedEffects || ReducedMotion);
+        OblationCombatBurst.Spawn(effectsRoot, position, color, impactMaterial, reducedEffects ? 10 : 40, reducedEffects);
     }
 
     void TriggerEvent()
     {
         switch (UnityEngine.Random.Range(0, 4))
         {
-            case 0: ore += 28; AddLog("운석 공물: 광물 +28."); break;
-            case 1: psi += 22; AddLog("신의 꿈: 정신력 +22."); break;
-            case 2: fuel = Mathf.Max(0, fuel - 14); AddLog("보급로 파열: 에너지 -14."); break;
-            default: industry += 18; aiStrength += .25f; AddLog("군비 경쟁: 산업력 +18, 적 위협 상승."); break;
+            case 0: AddResources(new OblationCost(0, 28, 0)); AddLog("운석 공물: 광물 잔해 +28."); break;
+            case 1: AddResources(new OblationCost(0, 0, 22)); AddLog("신의 꿈: 신경 에너지 +22."); break;
+            case 2: biomass = Mathf.Max(0, biomass - 14); AddLog("생물권 고갈: 생체 물질 -14."); break;
+            default: AddResources(new OblationCost(18, 0, 0)); aiStrength += .25f; AddLog("군비 경쟁: 생체 물질 +18, 적 위협 상승."); break;
         }
     }
 
     void Defend()
     {
-        if (defendPlanet < 0 || industry < 15) return;
-        industry -= 15;
+        if (defendPlanet < 0 || !TrySpend(new OblationCost(0, 15, 0))) return;
         for (int i = 0; i < attacks.Count; i++)
         {
             Attack attack = attacks[i];
@@ -680,7 +802,7 @@ public sealed partial class OblationGame : MonoBehaviour
     {
         if (pendingAssignment < 0) return;
         planets[pendingAssignment].type = type;
-        AddLog(planets[pendingAssignment].name + "의 역할: " + WorldTypeText(type) + ".");
+        AddLog(planets[pendingAssignment].name + "의 특화: " + WorldTypeText(type) + ".");
         pendingAssignment = -1;
         paused = false;
         PlayClick();
@@ -690,6 +812,7 @@ public sealed partial class OblationGame : MonoBehaviour
     {
         if (state != ScreenState.Playing) return;
         state = ScreenState.Victory;
+        FinishCampaignMetrics("victory");
         paused = true;
         AddLog("적이 굴복했습니다. 은하가 제물을 바칠 준비를 마쳤습니다.");
     }
@@ -698,6 +821,7 @@ public sealed partial class OblationGame : MonoBehaviour
     {
         if (state != ScreenState.Playing) return;
         state = ScreenState.Defeat;
+        FinishCampaignMetrics("defeat");
         paused = true;
         AddLog("당신의 제단 행성이 침묵했습니다.");
     }
@@ -721,20 +845,27 @@ public sealed partial class OblationGame : MonoBehaviour
             Material body = p.bodyRenderer.material;
             body.SetColor("_OwnerColor", ownerColor);
             body.SetFloat("_Selected", i == selectedPlanet ? 1f : 0f);
+            body.SetFloat("_SceneFocus", tutorialActive && i != 0 && i != tutorialTarget ? .22f : 1f);
+            planetViews[i].SetAtmosphere(Color.Lerp(body.GetColor("_AccentColor"),ownerColor,.4f),
+                (reducedEffects?.3f:1)*(tutorialActive&&i!=0&&i!=tutorialTarget?.18f:1),
+                tutorialActive&&i!=0&&i!=tutorialTarget?.22f:1);
+            p.hitFlash = Mathf.MoveTowards(p.hitFlash, 0, Time.unscaledDeltaTime * 2.8f);
+            body.SetFloat("_HitFlash", reducedEffects ? p.hitFlash * .2f : p.hitFlash);
             Material halo = p.haloRenderer.material;
             halo.SetColor("_OwnerColor", PlayerColor);
             halo.SetColor("_ContenderColor", EnemyColor);
             halo.SetFloat("_Progress", p.playerClaim);
             halo.SetFloat("_ContestedProgress", p.enemyClaim);
+            halo.SetFloat("_Opacity",.075f);
         }
         if (selectionRing != null)
         {
-            bool show = selectedPlanet >= 0 && state == ScreenState.Playing;
+            bool show = selectedPlanet >= 0 && state == ScreenState.Playing && !tutorialActive;
             selectionRing.SetActive(show);
             if (show)
             {
                 Planet p = planets[selectedPlanet];
-                float radius = p.scale * (1.55f + Mathf.Sin(Time.unscaledTime * 3f) * .06f);
+                float radius = p.scale * (1.55f + (ReducedMotion ? 0 : Mathf.Sin(Time.unscaledTime * 1.8f) * .025f));
                 Color color = OwnerColor(p.owner); color.a = .82f;
                 selectionLine.startColor = selectionLine.endColor = color;
                 for (int i = 0; i <= 64; i++)
@@ -750,27 +881,42 @@ public sealed partial class OblationGame : MonoBehaviour
             int a = Edges[i, 0], b = Edges[i, 1];
             Color color = planets[a].owner != Allegiance.Neutral && planets[a].owner == planets[b].owner ? OwnerColor(planets[a].owner) : new Color(.18f, .4f, .65f, .28f);
             color.a = planets[a].owner == planets[b].owner ? .5f : .22f;
+            if (tutorialActive) color.a = a == 0 && b == tutorialTarget || b == 0 && a == tutorialTarget ? .7f : .035f;
             routes[i].startColor = routes[i].endColor = color;
+            float routeWidth=Mathf.Clamp(Vector3.Distance(gameCamera.transform.position,cameraLookFocus)*.0016f,.045f,.34f);
+            routes[i].startWidth=routes[i].endWidth=routeWidth;
         }
     }
 
     static Color OwnerColor(Allegiance owner) => owner == Allegiance.Player ? PlayerColor : owner == Allegiance.Enemy ? EnemyColor : NeutralColor;
 
+    static Color AttackColor(Allegiance owner, AttackMode mode) => owner == Allegiance.Enemy ? EnemyColor :
+        mode == AttackMode.Surprise ? new Color(.4f, 1, .5f) : mode == AttackMode.Orbital ? new Color(.8f, .5f, 1) : PlayerColor;
+
     void AddLog(string message)
     {
+        if (feedbackText != null && !message.Contains(" // ")) { feedbackText.text = message; feedbackUntil = Time.unscaledTime + 3f; }
         eventLog.Insert(0, message);
-        if (eventLog.Count > 7) eventLog.RemoveAt(eventLog.Count - 1);
+        if (eventLog.Count > 5) eventLog.RemoveAt(eventLog.Count - 1);
     }
 
     static string AllegianceText(Allegiance value) => value == Allegiance.Player ? "플레이어" : value == Allegiance.Enemy ? "적" : "중립";
 
-    static string WorldTypeText(WorldType value) => value == WorldType.Unit ? "유닛 생산 행성" : value == WorldType.Manufacturing ? "제조 행성" : value == WorldType.Energy ? "에너지 생산 행성" : "미지정";
+    static string WorldTypeText(WorldType value) => value == WorldType.Unit ? "유닛 특화" : value == WorldType.Manufacturing ? "자원 특화" : value == WorldType.Energy ? "연구 특화" : "미지정";
 
-    static string ProductionText(Planet p)
+    static string ResourceText(OblationResource value) => value == OblationResource.Biomass ? "생체" :
+        value == OblationResource.Minerals ? "광물" : value == OblationResource.Neural ? "신경" : "공물";
+
+    string ProductionText(Planet p)
     {
-        return p.type == WorldType.Unit ? "생산: 전투 유닛 +0.12 / 노동 유닛 +0.08 (초당)" :
-            p.type == WorldType.Manufacturing ? "생산: 광물 +4.8 (채굴 +50%) / 산업력 +2.6 (초당)" :
-            p.type == WorldType.Energy ? "생산: 에너지 +2.25 / 정신력 +0.35 (초당)" : "개발 방향 선택을 기다리는 중입니다.";
+        if (p.destroyed) return "행성이 파괴되어 생산할 수 없습니다.";
+        if (p.owner == Allegiance.Player && !IsConnected(Array.IndexOf(catalog.planets, p.definition), Allegiance.Player))
+            return "안테나 연결 끊김: 생체·광물·신경 생산 정지";
+        OblationCost rate = ProductionPerMinute(p);
+        OblationCost reward = catalog.conquestRule.completionReward;
+        string queue = p.owner != Allegiance.Player ? "점령 후 안테나 연결 필요" :
+            string.IsNullOrEmpty(p.queuedUnitId) ? "대기열 없음" : FindUnit(p.queuedUnitId).displayName + " " + p.unitRemaining.ToString("0") + "초";
+        return $"분당 생체/광물/신경 {rate.biomass:0}/{rate.minerals:0}/{rate.neural:0} · 단절 시 0\n점령 보상 {reward.biomass:0}/{reward.minerals:0}/{reward.neural:0} + 공물{reward.offering:0}  |  {queue}";
     }
 
     void PlayClick()
@@ -813,9 +959,13 @@ public sealed partial class OblationGame : MonoBehaviour
     static float ReadScroll()
     {
 #if ENABLE_INPUT_SYSTEM
-        return Mouse.current != null ? Mouse.current.scroll.ReadValue().y : 0;
+        float scroll = Mouse.current != null ? Mouse.current.scroll.ReadValue().y : 0;
+#if UNITY_EDITOR_WIN || UNITY_STANDALONE_WIN
+        if (InputSystem.settings.scrollDeltaBehavior == InputSettings.ScrollDeltaBehavior.KeepPlatformSpecificInputRange) scroll /= 120f;
+#endif
+        return scroll;
 #else
-        return Input.mouseScrollDelta.y * 120f;
+        return Input.mouseScrollDelta.y;
 #endif
     }
 
